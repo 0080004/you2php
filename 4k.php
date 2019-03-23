@@ -2,6 +2,8 @@
 ini_set('display_errors', '0');
 /*
 miniProxy - A simple PHP web proxy. <https://github.com/joshdick/miniProxy>
+Written and maintained by Joshua Dick <http://joshdick.net>.
+miniProxy is licensed under the GNU GPL v3 <http://www.gnu.org/licenses/gpl.html>.
 */
 
 /****************************** START CONFIGURATION ******************************/
@@ -26,12 +28,12 @@ $anonymize = true;
 
 //Start/default URL that that will be proxied when miniProxy is first loaded in a browser/accessed directly with no URL to proxy.
 //If empty, miniProxy will show its own landing page.
-$startURL = "https://www.google.com";
+$startURL = "";
 
 //When no $startURL is configured above, miniProxy will show its own landing page with a URL form field
 //and the configured example URL. The example URL appears in the instructional text on the miniProxy landing page,
 //and is proxied when pressing the 'Proxy It!' button on the landing page if its URL form is left blank.
-$landingExampleURL = "https://www.google.com";
+$landingExampleURL = "https://example.net";
 
 /****************************** END CONFIGURATION ******************************/
 
@@ -41,7 +43,7 @@ if (version_compare(PHP_VERSION, "5.4.7", "<")) {
   die("miniProxy requires PHP version 5.4.7 or later.");
 }
 
-$requiredExtensions = ['curl', 'mbstring', 'xml'];
+$requiredExtensions = ["curl", "mbstring", "xml"];
 foreach($requiredExtensions as $requiredExtension) {
   if (!extension_loaded($requiredExtension)) {
     die("miniProxy requires PHP's \"" . $requiredExtension . "\" extension. Please install/enable it on your server and try again.");
@@ -74,6 +76,7 @@ function removeKeys(&$assoc, $keys2remove) {
 }
 
 if (!function_exists("getallheaders")) {
+  //Adapted from http://www.php.net/manual/en/function.getallheaders.php#99814
   function getallheaders() {
     $result = array();
     foreach($_SERVER as $key => $value) {
@@ -86,13 +89,13 @@ if (!function_exists("getallheaders")) {
   }
 }
 
-$usingDefaultPort =  (!isset($_SERVER["HTTP"]) && $_SERVER["SERVER_PORT"] === 80) || (isset($_SERVER["HTTPS"]) && $_SERVER["SERVER_PORT"] === 443);
+$usingDefaultPort =  (!isset($_SERVER["HTTPS"]) && $_SERVER["SERVER_PORT"] === 80) || (isset($_SERVER["HTTPS"]) && $_SERVER["SERVER_PORT"] === 443);
 $prefixPort = $usingDefaultPort ? "" : ":" . $_SERVER["SERVER_PORT"];
 //Use HTTP_HOST to support client-configured DNS (instead of SERVER_NAME), but remove the port if one is present
 $prefixHost = $_SERVER["HTTP_HOST"];
 $prefixHost = strpos($prefixHost, ":") ? implode(":", explode(":", $_SERVER["HTTP_HOST"], -1)) : $prefixHost;
 
-define("PROXY_PREFIX", "https" . "://" . $prefixHost . $_SERVER["SCRIPT_NAME"] . "?");
+define("PROXY_PREFIX", "http" . (isset($_SERVER["HTTPS"]) ? "s" : "") . "://" . $prefixHost . $prefixPort . $_SERVER["SCRIPT_NAME"] . "?");
 
 //Makes an HTTP request via cURL, using request data that was passed directly to this script.
 function makeRequest($url) {
@@ -102,7 +105,7 @@ function makeRequest($url) {
   //Tell cURL to make the request using the brower's user-agent if there is one, or a fallback user-agent otherwise.
   $user_agent = $_SERVER["HTTP_USER_AGENT"];
   if (empty($user_agent)) {
-    $user_agent = "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2272.96 Mobile Safari/537.36 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)";
+    $user_agent = "Mozilla/5.0 (compatible; miniProxy)";
   }
   $ch = curl_init();
   curl_setopt($ch, CURLOPT_USERAGENT, $user_agent);
@@ -118,7 +121,7 @@ function makeRequest($url) {
     "Origin"
   ));
 
-  array_change_key_case($removedHeaders, CASE_LOWER);
+  $removedHeaders = array_map("strtolower", $removedHeaders);
 
   curl_setopt($ch, CURLOPT_ENCODING, "");
   //Transform the associative array from getallheaders() into an
@@ -132,10 +135,10 @@ function makeRequest($url) {
   }
   //Any `origin` header sent by the browser will refer to the proxy itself.
   //If an `origin` header is present in the request, rewrite it to point to the correct origin.
-  if (array_key_exists('origin', $removedHeaders)) {
+  if (in_array("origin", $removedHeaders)) {
     $urlParts = parse_url($url);
-    $port = $urlParts['port'];
-    $curlRequestHeaders[] = "Origin: " . $urlParts['scheme'] . "://" . $urlParts['host'] . (empty($port) ? "" : ":" . $port);
+    $port = $urlParts["port"];
+    $curlRequestHeaders[] = "Origin: " . $urlParts["scheme"] . "://" . $urlParts["host"] . (empty($port) ? "" : ":" . $port);
   };
   curl_setopt($ch, CURLOPT_HTTPHEADER, $curlRequestHeaders);
 
@@ -144,8 +147,10 @@ function makeRequest($url) {
     case "POST":
       curl_setopt($ch, CURLOPT_POST, true);
       //For some reason, $HTTP_RAW_POST_DATA isn't working as documented at
+      //http://php.net/manual/en/reserved.variables.httprawpostdata.php
       //but the php://input method works. This is likely to be flaky
       //across different server environments.
+      //More info here: http://stackoverflow.com/questions/8899239/http-raw-post-data-not-being-populated-after-upgrade-to-php-5-3
       //If the miniProxyFormAction field appears in the POST data, remove it so the destination server doesn't receive it.
       $postData = Array();
       parse_str(file_get_contents("php://input"), $postData);
@@ -183,6 +188,7 @@ function makeRequest($url) {
 }
 
 //Converts relative URLs to absolute ones, given a base URL.
+//Modified version of code found at http://nashruddin.com/PHP_Script_for_Converting_Relative_to_Absolute_URL
 function rel2abs($rel, $base) {
   if (empty($rel)) $rel = ".";
   if (parse_url($rel, PHP_URL_SCHEME) != "" || strpos($rel, "//") === 0) return $rel; //Return if already an absolute URL
@@ -190,7 +196,7 @@ function rel2abs($rel, $base) {
   extract(parse_url($base)); //Parse base URL and convert to local variables: $scheme, $host, $path
   $path = isset($path) ? preg_replace("#/[^/]*$#", "", $path) : "/"; //Remove non-directory element from path
   if ($rel[0] == "/") $path = ""; //Destroy path if relative url points to root
-  $port = isset($port) && $port != 443 ? ":" . $port : "";
+  $port = isset($port) && $port != 80 ? ":" . $port : "";
   $auth = "";
   if (isset($user)) {
     $auth = $user;
@@ -199,7 +205,7 @@ function rel2abs($rel, $base) {
     }
     $auth .= "@";
   }
-  $abs = "$auth$host$path/$rel"; //Dirty absolute URL
+  $abs = "$auth$host$port$path/$rel"; //Dirty absolute URL
   for ($n = 1; $n > 0; $abs = preg_replace(array("#(/\.?/)#", "#/(?!\.\.)[^/]+/\.\./#"), "/", $abs, -1, $n)) {} //Replace '//' or '/./' or '/foo/../' with '/'
   return $scheme . "://" . $abs; //Absolute URL is ready.
 }
@@ -285,7 +291,7 @@ $scheme = parse_url($url, PHP_URL_SCHEME);
 if (empty($scheme)) {
   //Assume that any supplied URLs starting with // are HTTP URLs.
   if (strpos($url, "//") === 0) {
-    $url = "https:" . $url;
+    $url = "http:" . $url;
   }
 } else if (!preg_match("/^https?$/i", $scheme)) {
     die('Error: Detected a "' . $scheme . '" URL. miniProxy exclusively supports http[s] URLs.');
@@ -306,9 +312,8 @@ if (!$urlIsValid) {
 $response = makeRequest($url);
 $rawResponseHeaders = $response["headers"];
 $responseBody = $response["body"];
-$jsurl=str_replace("/","\/",PROXY_PREFIX).'https:\/\/';
 $responseInfo = $response["responseInfo"];
-$responseBody=str_replace("https:\/\/","$jsurl",$responseBody);
+
 //If CURLOPT_FOLLOWLOCATION landed the proxy at a diferent URL than
 //what was requested, explicitly redirect the proxy there.
 $responseURL = $responseInfo["url"];
@@ -336,6 +341,7 @@ foreach ($headerLines as $header) {
 header("X-Robots-Tag: noindex, nofollow", true);
 
 if ($forceCORS) {
+  //This logic is based on code found at: http://stackoverflow.com/a/9866124/278810
   //CORS headers sent below may conflict with CORS headers from the original response,
   //so these headers are sent after the original response headers to ensure their values
   //are the ones that actually end up getting sent to the browser.
@@ -419,7 +425,8 @@ if (stripos($contentType, "text/html") !== false) {
   foreach($proxifyAttributes as $attrName) {
     foreach($xpath->query("//*[@" . $attrName . "]") as $element) { //For every element with the given attribute...
       $attrContent = $element->getAttribute($attrName);
-      if ($attrName == "href" && preg_match("/^(about|javascript|magnet|mailto):/i", $attrContent)) continue;
+      if ($attrName == "href" && preg_match("/^(about|javascript|magnet|mailto):|#/i", $attrContent)) continue;
+      if ($attrName == "src" && preg_match("/^(data):/i", $attrContent)) continue;
       $attrContent = rel2abs($attrContent, $url);
       $attrContent = PROXY_PREFIX . $attrContent;
       $element->setAttribute($attrName, $attrContent);
@@ -432,6 +439,7 @@ if (stripos($contentType, "text/html") !== false) {
   //The rel2abs() JavaScript function serves the same purpose as the server-side one in this file,
   //but is used in the browser to ensure all AJAX request URLs are absolute and not relative.
   //Uses code from these sources:
+  //http://stackoverflow.com/questions/7775767/javascript-overriding-xmlhttprequest-open
   //https://gist.github.com/1088850
   //TODO: This is obviously only useful for browsers that use XMLHttpRequest but
   //it's better than nothing.
@@ -501,7 +509,9 @@ if (stripos($contentType, "text/html") !== false) {
               if (arguments[1] !== null && arguments[1] !== undefined) {
                 var url = arguments[1];
                 url = rel2abs("' . $url . '", url);
-                url = "' . PROXY_PREFIX . '" + url;
+                if (url.indexOf("' . PROXY_PREFIX . '") == -1) {
+                  url = "' . PROXY_PREFIX . '" + url;
+                }
                 arguments[1] = url;
               }
               return proxied.apply(this, [].slice.call(arguments));
